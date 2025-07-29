@@ -1,0 +1,76 @@
+import cdsapi
+import xarray as xr
+import numpy as np
+
+# 1. Download ERA5-Land data (you must configure ~/.cdsapirc first)
+def download_era5_land(start_date, end_date, bbox, output_file):
+    c = cdsapi.Client()
+    c.retrieve(
+        'era5-land',
+        {
+            'format': 'netcdf',
+            'variable': [
+                '2m_temperature',
+                '2m_dewpoint_temperature',
+                'surface_solar_radiation_downwards',
+            ],
+            'area': bbox,  # [N, W, S, E]
+            'time': [
+                '00:00', '01:00', '02:00', '03:00', '04:00', '05:00',
+                '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
+                '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
+                '18:00', '19:00', '20:00', '21:00', '22:00', '23:00'
+            ],
+            'date': f'{start_date}/{end_date}',
+        },
+        output_file
+    )
+
+# 2. Compute relative humidity from temperature and dewpoint
+def compute_relative_humidity(temp, dewpoint):
+    # Magnus formula
+    A, B = 17.625, 243.04
+    alpha = (A * dewpoint) / (B + dewpoint)
+    beta = (A * temp) / (B + temp)
+    rh = 100 * (np.exp(alpha - beta))
+    return np.clip(rh, 0, 100)  # Limit RH between 0-100%
+
+# 3. Process data
+def process_era5_data(file_path):
+    ds = xr.open_dataset(file_path)
+
+    # Convert from Kelvin to Celsius
+    t2m = ds['t2m'] - 273.15
+    d2m = ds['d2m'] - 273.15
+
+    # Calculate relative humidity
+    rh = compute_relative_humidity(t2m, d2m)
+
+    # Solar radiation in J/m²; you can convert to W/m² if averaging per hour
+    ssrd = ds['ssrd']
+
+    # Daily average RH and Solar Radiastion
+    daily_rh = rh.resample(time='1D').mean()
+    daily_ssrd = ssrd.resample(time='1D').mean()
+
+    return daily_rh, daily_ssrd
+
+# Example use
+if __name__ == "__main__":
+    # Southern Ivory Coast bounding box: [north, west, south, east]
+    bbox = [6.5, -7.5, 4.5, -2.5]  # Adjust if needed
+
+    start_date = "2023-01-01"
+    end_date = "2023-01-31"
+    output_file = "era5_land_south_ivory_coast.nc"
+
+    # Download (skip this if you've already downloaded)
+    download_era5_land(start_date, end_date, bbox, output_file)
+
+    # Process
+    rh_daily, ssrd_daily = process_era5_data(output_file)
+    
+    # Save results
+    rh_daily.to_netcdf("relative_humidity_daily.nc")
+    ssrd_daily.to_netcdf("solar_radiation_daily.nc")
+    print("Processed and saved daily RH and solar radiation.")
