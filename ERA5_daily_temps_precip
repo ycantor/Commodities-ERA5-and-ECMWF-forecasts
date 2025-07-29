@@ -1,0 +1,59 @@
+import cdsapi
+import xarray as xr
+import pandas as pd
+import numpy as np
+import os
+
+def download_era5_data(start_date, end_date, output_file):
+    c = cdsapi.Client()
+
+    c.retrieve(
+        'reanalysis-era5-single-levels',
+        {
+            'product_type': 'reanalysis',
+            'format': 'netcdf',
+            'variable': [
+                '2m_temperature',
+                'total_precipitation',
+            ],
+            'year': [start_date[:4]],
+            'month': [start_date[5:7]],
+            'day': [f"{int(start_date[8:10]) + i}" for i in range((pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1)],
+            'time': [f'{h:02d}:00' for h in range(24)],
+            'area': [6.5, -7.5, 4.5, -2.5],  # [North, West, South, East]
+        },
+        output_file
+    )
+
+def process_era5_to_csv(netcdf_file, output_csv):
+    ds = xr.open_dataset(netcdf_file)
+
+    # Temperature: convert from Kelvin to Celsius
+    t2m = ds['t2m'] - 273.15
+    tp = ds['tp'] * 1000  # Convert from meters to mm
+
+    # Spatial average
+    t2m = t2m.mean(dim=['latitude', 'longitude'])
+    tp = tp.mean(dim=['latitude', 'longitude'])
+
+    # Resample to daily min/max
+    df = pd.DataFrame({
+        'tmin': t2m.resample(time='1D').min().values,
+        'tmax': t2m.resample(time='1D').max().values,
+        'precip': tp.resample(time='1D').sum().values,
+    }, index=pd.to_datetime(t2m.time.resample(time='1D').first().time.values))
+
+    df.index.name = 'date'
+    df.to_csv(output_csv)
+    print(f" Saved daily CSV to {output_csv}")
+
+if __name__ == "__main__":
+    start_date = "2024-07-01"
+    end_date = "2024-07-15"
+    netcdf_file = "era5_ivory_coast.nc"
+    output_csv = "era5_daily_ivory_coast.csv"
+
+    if not os.path.exists(netcdf_file):
+        download_era5_data(start_date, end_date, netcdf_file)
+
+    process_era5_to_csv(netcdf_file, output_csv)
