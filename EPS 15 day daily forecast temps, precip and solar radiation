@@ -1,0 +1,70 @@
+from ecmwfapi import ECMWFDataServer
+import xarray as xr
+import pandas as pd
+import os
+
+def download_eps_forecast(date, output_file):
+    server = ECMWFDataServer()
+
+    bbox = [6.5, -7.5, 4.5, -2.5]  # [North, West, South, East] — Southern Ivory Coast
+
+    server.retrieve({
+        'class': 'ti',
+        'dataset': 'tigge',
+        'date': date,
+        'expver': 'prod',
+        'grid': '0.25/0.25',
+        'area': bbox,
+        'origin': 'ecmf',
+        'param': '121/122/176/228',  # Tmax, Tmin, Solar radiation, Precip
+        'step': '24/to/360/by/24',  # Daily steps up to 15 days
+        'time': '00:00:00',
+        'type': 'pf',
+        'number': '1/to/50',
+        'levtype': 'sfc',
+        'format': 'netcdf',
+        'target': output_file
+    })
+
+def convert_to_csv(netcdf_file, output_prefix):
+    ds = xr.open_dataset(netcdf_file)
+
+    # Variable map: ECMWF parameter codes to user-friendly names
+    variable_map = {
+        '121': 'tmax',
+        '122': 'tmin',
+        '176': 'solar_radiation',
+        '228': 'precip'
+    }
+
+    for var_code, var_name in variable_map.items():
+        # Find the matching variable in the dataset
+        matches = [v for v in ds.data_vars if v.startswith(var_code)]
+        if not matches:
+            print(f" Variable {var_code} ({var_name}) not found in dataset.")
+            continue
+        var = ds[matches[0]]
+
+        # Average spatially (over the region)
+        mean_data = var.mean(dim=["latitude", "longitude"])
+
+        # Create DataFrame: rows = time, columns = ensemble members
+        df = mean_data.to_pandas().T
+        df.columns = [f"member_{i}" for i in df.columns]
+        df.index = pd.to_datetime(df.index)
+        df.index.name = 'date'
+
+        # Save to CSV
+        csv_file = f"{output_prefix}_{var_name}.csv"
+        df.to_csv(csv_file)
+        print(f" Saved {csv_file}")
+
+if __name__ == "__main__":
+    forecast_date = "2025-07-27"  # Use latest available date
+    netcdf_file = "eps_forecast_ivory_coast.nc"
+    output_prefix = "ivory_coast_eps"
+
+    if not os.path.exists(netcdf_file):
+        download_eps_forecast(forecast_date, netcdf_file)
+
+    convert_to_csv(netcdf_file, output_prefix)
