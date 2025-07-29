@@ -1,0 +1,58 @@
+# EPS Forecast Downloader for Southern Côte d’Ivoire (Ivory Coast)
+# Downloads 2m temperature and total precipitation forecasts (15 days ahead) from ECMWF EPS
+
+from ecmwfapi import ECMWFDataServer
+from datetime import datetime, timedelta
+import os
+
+#  Configuration
+save_dir = "ecmwf_eps_forecasts"
+region_name = "southern_ivory_coast"
+lat_north, lat_south = 6.5, 4.0
+lon_west, lon_east = -8.0, -2.0
+area = f"{lat_north}/{lon_west}/{lat_south}/{lon_east}"
+
+forecast_date = datetime.utcnow().strftime("%Y-%m-%d")  # today's date in UTC
+time = "00:00:00"  # use "12:00:00" if desired
+
+#  Create output folder
+os.makedirs(save_dir, exist_ok=True)
+
+#  ECMWF server connection
+server = ECMWFDataServer()
+
+#  Define request
+def download_eps_forecast(date_str):
+    filename = f"{save_dir}/eps_{region_name}_{date_str}.nc"
+    
+    if os.path.exists(filename):
+        print(f" Forecast already exists for {date_str}, skipping.")
+        return
+
+    print(f" Downloading EPS forecast for {date_str}...")
+
+    server.retrieve({
+        'class': 'od',
+        'dataset': 'ens',
+        'stream': 'enfo',
+        'type': 'pf',  # Perturbed forecast
+        'step': '24/to/360/by/24',  # Every 24h up to 15 days
+        'time': time,
+        'date': date_str,
+        'origin': 'ecmf',
+        'levtype': 'sfc',
+        'param': '228.128/167.128',  # Precipitation + 2m Temperature
+        'area': area,
+        'format': 'netcdf',
+        'target': filename
+    })
+
+    print(f" Forecast saved to: {filename}")
+
+#  Download today's forecast
+download_eps_forecast(forecast_date)
+
+#  OPTIONAL: Download past N days for backfilling
+# for i in range(1, 3):
+#     past_date = (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d")
+#     download_eps_forecast(past_date)
