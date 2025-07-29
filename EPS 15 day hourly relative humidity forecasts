@@ -2,11 +2,12 @@ from ecmwfapi import ECMWFDataServer
 import xarray as xr
 import pandas as pd
 import numpy as np
+import os
 
-def download_eps_temp_dewpoint(date, output_file):
+def download_eps_t2m_d2m(date, output_file):
     server = ECMWFDataServer()
 
-    bbox = [6.5, -7.5, 4.5, -2.5]  # [North, West, South, East]
+    bbox = [6.5, -7.5, 4.5, -2.5]  # [North, West, South, East] — Southern Ivory Coast
 
     server.retrieve({
         'class': 'ti',
@@ -16,5 +17,57 @@ def download_eps_temp_dewpoint(date, output_file):
         'grid': '0.25/0.25',
         'area': bbox,
         'origin': 'ecmf',
-        'param': '167/168',  # 2m temp / 2m dewpoint
-        'step': '0/to/360/by/3',  # 3-hour steps to
+        'param': '167/168',  # 2m temperature / 2m dewpoint
+        'step': '0/to/360/by/3',  # Every 3 hours, up to 15 days
+        'time': '00:00:00',
+        'type': 'pf',
+        'number': '1/to/50',
+        'levtype': 'sfc',
+        'format': 'netcdf',
+        'target': output_file
+    })
+
+def compute_relative_humidity(t2m, d2m):
+    # Convert from Kelvin to Celsius
+    t = t2m - 273.15
+    td = d2m - 273.15
+
+    # Magnus formula
+    A = 17.625
+    B = 243.04
+    alpha = (A * td) / (B + td)
+    beta = (A * t) / (B + t)
+    rh = 100 * np.exp(alpha - beta)
+    return np.clip(rh, 0, 100)
+
+def process_to_csv(netcdf_file, output_csv):
+    ds = xr.open_dataset(netcdf_file)
+
+    # Extract variables by parameter code
+    t2m_var = [v for v in ds.data_vars if '167' in v][0]
+    d2m_var = [v for v in ds.data_vars if '168' in v][0]
+    t2m = ds[t2m_var].mean(dim=['latitude', 'longitude'])
+    d2m = ds[d2m_var].mean(dim=['latitude', 'longitude'])
+
+    # Compute RH
+    rh = compute_relative_humidity(t2m, d2m)
+
+    # Convert to pandas DataFrame
+    df = rh.to_pandas().T
+    df.columns = [f'member_{i}' for i in df.columns]
+    df.index = pd.to_datetime(df.index)
+    df.index.name = 'datetime'
+
+    # Save to CSV
+    df.to_csv(output_csv)
+    print(f"✅ Saved RH forecasts to: {output_csv}")
+
+if __name__ == "__main__":
+    forecast_date = "2025-07-27"  # Use a recent available TIGGE forecast date
+    netcdf_file = "eps_t2m_d2m_ivory_coast.nc"
+    output_csv = "eps_relative_humidity_ivory_coast.csv"
+
+    if not os.path.exists(netcdf_file):
+        download_eps_t2m_d2m(forecast_date, netcdf_file)
+
+    process_to_csv(netcdf_file, output_csv)
