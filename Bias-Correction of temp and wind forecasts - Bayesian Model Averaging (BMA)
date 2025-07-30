@@ -1,0 +1,242 @@
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+from scipy.stats import norm, gamma
+import matplotlib.pyplot as plt
+
+# --- Bayesian Model Averaging (BMA) Core Functions ---
+
+def train_bma_temperature(forecasts_train, obs_train):
+    """
+    Trains a BMA model for temperature forecasts using a Normal distribution.
+
+    The BMA predictive PDF is a mixture of Normal distributions:
+    p(y) = sum_{k=1 to K} w_k * N(y | a + b*f_k, sigma^2)
+
+    Args:
+        forecasts_train (np.array): Training data for ensemble forecasts (N_samples, K_members).
+        obs_train (np.array): Training data for observations (N_samples,).
+
+    Returns:
+        dict: A dictionary containing the trained BMA parameters ('weights', 'sigma', 'a', 'b').
+    """
+    K_members = forecasts_train.shape[1]
+
+    # Define the negative log-likelihood function to be minimized
+    def neg_log_likelihood(params):
+        # Unpack parameters: K weights, sigma, a, b
+        weights = params[:K_members]
+        sigma = params[K_members]
+        a = params[K_members + 1]
+        b = params[K_members + 2]
+
+        if sigma <= 0: return np.inf # Sigma must be positive
+
+        likelihoods = np.zeros_like(obs_train, dtype=float)
+        for i in range(len(obs_train)):
+            pdf_sum = 0
+            for k in range(K_members):
+                # Bias-corrected mean for this member
+                mean_k = a + b * forecasts_train[i, k]
+                # PDF of observation given this member's forecast
+                pdf_k = norm.pdf(obs_train[i], loc=mean_k, scale=sigma)
+                pdf_sum += weights[k] * pdf_k
+            # Avoid log(0)
+            likelihoods[i] = np.log(pdf_sum if pdf_sum > 1e-9 else 1e-9)
+        
+        return -np.sum(likelihoods)
+
+    # Initial guesses for parameters
+    initial_weights = np.full(K_members, 1.0 / K_members)
+    initial_sigma = np.std(obs_train)
+    initial_a = 0.0
+    initial_b = 1.0
+    initial_params = np.concatenate([initial_weights, [initial_sigma, initial_a, initial_b]])
+
+    # Constraints: weights sum to 1, all parameters non-negative (except 'a')
+    cons = ({'type': 'eq', 'fun': lambda params: np.sum(params[:K_members]) - 1})
+    bounds = [(0, 1)] * K_members + [(1e-6, None)] + [(None, None)] + [(None, None)]
+
+    # Run the optimization
+    result = minimize(neg_log_likelihood, initial_params, method='SLSQP', bounds=bounds, constraints=cons)
+
+    # Extract optimal parameters
+    w_opt = result.x[:K_members]
+    sigma_opt = result.x[K_members]
+    a_opt = result.x[K_members + 1]
+    b_opt = result.x[K_members + 2]
+    
+    return {'weights': w_opt, 'sigma': sigma_opt, 'a': a_opt, 'b': b_opt}
+
+
+def train_bma_wind_speed(forecasts_train, obs_train):
+    """
+    Trains a BMA model for wind speed forecasts using a Gamma distribution.
+
+    The BMA predictive PDF is a mixture of Gamma distributions:
+    p(y) = sum_{k=1 to K} w_k * Gamma(y | alpha_k, beta)
+    where mean = a + b*f_k and variance = c1 * mean
+
+    Args:
+        forecasts_train (np.array): Training data for ensemble forecasts (N_samples, K_members).
+        obs_train (np.array): Training data for observations (N_samples,).
+
+    Returns:
+        dict: A dictionary containing the trained BMA parameters ('weights', 'a', 'b', 'c1').
+    """
+    K_members = forecasts_train.shape[1]
+
+    def neg_log_likelihood(params):
+        weights = params[:K_members]
+        a = params[K_members]
+        b = params[K_members + 1]
+        c1 = params[K_members + 2]
+
+        if b <= 0 or c1 <= 0: return np.inf
+
+        likelihoods = np.zeros_like(obs_train, dtype=float)
+        for i in range(len(obs_train)):
+            # Skip if observation is zero, as Gamma is not defined at 0
+            if obs_train[i] <= 0: continue
+            
+            pdf_sum = 0
+            for k in range(K_members):
+                # Mean of the Gamma distribution for member k
+                mu_k = a + b * forecasts_train[i, k]
+                if mu_k <= 0: continue # Mean must be positive
+
+                # Variance is modeled as proportional to the mean
+                var_k = c1 * mu_k
+                
+                # Convert mean/variance to shape/scale for scipy's gamma
+                scale = var_k / mu_k
+                shape = mu_k / scale
+                
+                pdf_k = gamma.pdf(obs_train[i], a=shape, scale=scale)
+                pdf_sum += weights[k] * pdf_k
+            
+            likelihoods[i] = np.log(pdf_sum if pdf_sum > 1e-9 else 1e-9)
+
+        return -np.sum(likelihoods)
+
+    # Initial guesses
+    initial_weights = np.full(K_members, 1.0 / K_members)
+    initial_a = 0.0
+    initial_b = 1.0
+    initial_c1 = 1.0
+    initial_params = np.concatenate([initial_weights, [initial_a, initial_b, initial_c1]])
+
+    # Constraints
+    cons = ({'type': 'eq', 'fun': lambda params: np.sum(params[:K_members]) - 1})
+    bounds = [(0, 1)] * K_members + [(None, None)] + [(1e-6, None)] * 2
+
+    result = minimize(neg_log_likelihood, initial_params, method='SLSQP', bounds=bounds, constraints=cons)
+
+    w_opt = result.x[:K_members]
+    a_opt = result.x[K_members]
+    b_opt = result.x[K_members + 1]
+    c1_opt = result.x[K_members + 2]
+
+    return {'weights': w_opt, 'a': a_opt, 'b': b_opt, 'c1': c1_opt}
+
+
+def plot_calibrated_forecast(forecast_instance, obs_instance, params, model_type='temperature'):
+    """Plots the raw ensemble, the calibrated PDF, and the observation."""
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Plot raw ensemble members
+    ax.plot(forecast_instance, [0.01] * len(forecast_instance), 'r|', markersize=20, markeredgewidth=2, label='Raw Ensemble Members')
+    
+    # Plot observation
+    ax.axvline(obs_instance, color='black', linestyle='--', linewidth=2, label=f'Observation ({obs_instance:.1f})')
+
+    # Create and plot the BMA PDF
+    if model_type == 'temperature':
+        x = np.linspace(np.min(forecast_instance) - 5, np.max(forecast_instance) + 5, 300)
+        bma_pdf = np.zeros_like(x)
+        for k in range(len(params['weights'])):
+            mean_k = params['a'] + params['b'] * forecast_instance[k]
+            bma_pdf += params['weights'][k] * norm.pdf(x, loc=mean_k, scale=params['sigma'])
+        ax.set_title(f'BMA Calibrated Temperature Forecast (°F) 🌡️', fontsize=16)
+        ax.set_xlabel("Temperature (°F)")
+    
+    elif model_type == 'wind_speed':
+        x = np.linspace(0, np.max(forecast_instance) + 10, 300)
+        bma_pdf = np.zeros_like(x)
+        for k in range(len(params['weights'])):
+            mu_k = params['a'] + params['b'] * forecast_instance[k]
+            if mu_k <= 0: continue
+            var_k = params['c1'] * mu_k
+            scale = var_k / mu_k
+            shape = mu_k / scale
+            bma_pdf += params['weights'][k] * gamma.pdf(x, a=shape, scale=scale)
+        ax.set_title(f'BMA Calibrated Wind Speed Forecast (mph) 🌬️', fontsize=16)
+        ax.set_xlabel("Wind Speed (mph)")
+
+    ax.plot(x, bma_pdf, 'b-', linewidth=2, label='BMA Calibrated PDF')
+    ax.set_ylabel("Probability Density")
+    ax.legend()
+    plt.show()
+
+# --- Main Execution: Simulate Data and Run BMA ---
+if __name__ == '__main__':
+    # 1. SIMULATE ERCOT FORECAST & OBSERVATION DATA
+    # In a real scenario, you would load your data here.
+    # We simulate a training period (e.g., last 30 days)
+    N_TRAIN_SAMPLES = 100
+    K_MEMBERS = 10 # 10-member ensemble
+
+    # --- Temperature Data Simulation (°F) ---
+    print("--- Calibrating Temperature ---")
+    np.random.seed(0)
+    true_temp = np.random.uniform(50, 95, N_TRAIN_SAMPLES)
+    # Simulate biased forecasts with some spread
+    temp_forecasts_train = np.array([
+        true_temp + np.random.normal(-2, 5, N_TRAIN_SAMPLES) for _ in range(K_MEMBERS)
+    ]).T
+    temp_obs_train = true_temp + np.random.normal(0, 1.5, N_TRAIN_SAMPLES)
+    
+    # 2. TRAIN TEMPERATURE BMA MODEL
+    temp_params = train_bma_temperature(temp_forecasts_train, temp_obs_train)
+    print("\n✅ Trained Temperature BMA Parameters:")
+    print(f"   Weights: {[f'{w:.3f}' for w in temp_params['weights']]}")
+    print(f"   Sigma (Std Dev): {temp_params['sigma']:.3f}")
+    print(f"   Bias Correction 'a': {temp_params['a']:.3f}, 'b': {temp_params['b']:.3f}")
+
+    # 3. VISUALIZE A SINGLE CALIBRATED TEMPERATURE FORECAST
+    # A new forecast instance for a specific time
+    test_true_temp = 75.0
+    test_temp_forecast = test_true_temp + np.random.normal(-2.5, 4, K_MEMBERS)
+    test_temp_obs = test_true_temp + np.random.normal(0, 1.5)
+    plot_calibrated_forecast(test_temp_forecast, test_temp_obs, temp_params, model_type='temperature')
+    
+    # --- Horizontal line for separation ---
+    print("\n" + "="*80 + "\n")
+    
+    # --- Wind Speed Data Simulation (mph) ---
+    print("--- Calibrating Wind Speed ---")
+    np.random.seed(42)
+    true_wind = np.random.gamma(shape=3.0, scale=5.0, size=N_TRAIN_SAMPLES) # Skewed data
+    # Simulate forecasts that underestimate high wind speeds
+    wind_forecasts_train = np.array([
+        true_wind * 0.85 + np.random.gamma(1.0, 2.0, N_TRAIN_SAMPLES) for _ in range(K_MEMBERS)
+    ]).T
+    wind_obs_train = true_wind + np.random.gamma(0.5, 1.0, N_TRAIN_SAMPLES)
+    
+    # Ensure no negative wind speeds
+    wind_forecasts_train[wind_forecasts_train < 0] = 0
+    wind_obs_train[wind_obs_train < 0] = 0
+
+    # 4. TRAIN WIND SPEED BMA MODEL
+    wind_params = train_bma_wind_speed(wind_forecasts_train, wind_obs_train)
+    print("\n✅ Trained Wind Speed BMA Parameters:")
+    print(f"   Weights: {[f'{w:.3f}' for w in wind_params['weights']]}")
+    print(f"   Bias Correction 'a': {wind_params['a']:.3f}, 'b': {wind_params['b']:.3f}")
+    print(f"   Variance Param 'c1': {wind_params['c1']:.3f}")
+
+    # 5. VISUALIZE A SINGLE CALIBRATED WIND SPEED FORECAST
+    test_true_wind = 22.0 # A high wind event
+    test_wind_forecast = test_true_wind * 0.8 + np.random.gamma(1.0, 2.0, K_MEMBERS)
+    test_wind_obs = test_true_wind + np.random.gamma(0.5, 1.0)
+    plot_calibrated_forecast(test_wind_forecast, test_wind_obs, wind_params, model_type='wind_speed')
