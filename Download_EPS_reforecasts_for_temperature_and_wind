@@ -1,0 +1,27 @@
+import cdsapi
+
+# Initialize API client
+c = cdsapi.Client()
+
+# --- Configuration ---
+# Adjust the area to your region: [North, West, South, East]
+region_area = [10, -10, -10, 10]  # Example: West Africa box
+
+c.retrieve(
+    'seasonal-original-single-levels',
+    {
+        'format': 'grib',  # can be 'netcdf' for some products
+        'originating_centre': 'ecmwf',
+        'system': '5',  # ECMWF System 5 (use '51' for System 6)
+        'variable': [
+            '2m_temperature', '10m_u_component_of_wind', '10m_v_component_of_wind',
+        ],
+        'product_type': 'ensemble_member',  # For individual members
+        'year': ['2019', '2020', '2021'],  # Adjust years as needed
+        'month': ['01', '02', '03'],       # Start months of reforecasts
+        'day': ['01'],                     # Always the same day of the week, e.g., Mondays
+        'leadtime_hour': [str(i * 24) for i in range(1, 46)],  # 1 to 45 days
+        'area': region_area,
+        'grid': [1.0, 1.0],                # Grid resolution in degrees (coarse = faster download)
+    },
+    'eps_reforecasts.grib')
