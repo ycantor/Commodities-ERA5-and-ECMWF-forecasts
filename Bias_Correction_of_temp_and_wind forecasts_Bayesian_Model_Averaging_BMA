@@ -199,7 +199,7 @@ if __name__ == '__main__':
     
     # 2. TRAIN TEMPERATURE BMA MODEL
     temp_params = train_bma_temperature(temp_forecasts_train, temp_obs_train)
-    print("\n✅ Trained Temperature BMA Parameters:")
+    print("\n Trained Temperature BMA Parameters:")
     print(f"   Weights: {[f'{w:.3f}' for w in temp_params['weights']]}")
     print(f"   Sigma (Std Dev): {temp_params['sigma']:.3f}")
     print(f"   Bias Correction 'a': {temp_params['a']:.3f}, 'b': {temp_params['b']:.3f}")
@@ -230,7 +230,7 @@ if __name__ == '__main__':
 
     # 4. TRAIN WIND SPEED BMA MODEL
     wind_params = train_bma_wind_speed(wind_forecasts_train, wind_obs_train)
-    print("\n✅ Trained Wind Speed BMA Parameters:")
+    print("\n Trained Wind Speed BMA Parameters:")
     print(f"   Weights: {[f'{w:.3f}' for w in wind_params['weights']]}")
     print(f"   Bias Correction 'a': {wind_params['a']:.3f}, 'b': {wind_params['b']:.3f}")
     print(f"   Variance Param 'c1': {wind_params['c1']:.3f}")
