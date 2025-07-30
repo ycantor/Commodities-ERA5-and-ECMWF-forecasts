@@ -48,7 +48,7 @@ def process_era5_to_csv(netcdf_file, output_csv):
     print(f" Saved daily CSV to {output_csv}")
 
 if __name__ == "__main__":
-    start_date = "2024-07-01"
+    start_date = "2024-07-01" #Sample dates; adjust as needed
     end_date = "2024-07-15"
     netcdf_file = "era5_ivory_coast.nc"
     output_csv = "era5_daily_ivory_coast.csv"
