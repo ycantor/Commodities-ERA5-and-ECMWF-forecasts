@@ -60,7 +60,7 @@ def process_to_csv(netcdf_file, output_csv):
 
     # Save to CSV
     df.to_csv(output_csv)
-    print(f"✅ Saved RH forecasts to: {output_csv}")
+    print(f" Saved RH forecasts to: {output_csv}")
 
 if __name__ == "__main__":
     forecast_date = "2025-07-27"  # Use a recent available TIGGE forecast date
