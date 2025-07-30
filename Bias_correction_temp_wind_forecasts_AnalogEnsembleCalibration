@@ -1,1 +1,72 @@
+import numpy as np
+import pandas as pd
+from sklearn.metrics import pairwise_distances_argmin_min
+
+# --- INPUT FILES (example placeholders) ---
+# Historical reforecasts (ensemble mean or members) and observations
+# Format: date, lead_time, variable (temp or wind), value
+reforecast_df = pd.read_csv('reforecasts.csv')     # Historical EPS forecasts
+obs_df = pd.read_csv('observations.csv')           # Observed values
+
+# Current raw forecast to be corrected
+forecast_df = pd.read_csv('forecast_to_correct.csv')
+
+# --- CONFIGURATION ---
+n_analogs = 20
+forecast_lead_times = forecast_df['lead_time'].unique()
+variables = ['temperature', 'wind']
+
+# --- BUILD ANALOG FUNCTION ---
+def find_analogs(forecast_vector, ref_vectors, ref_obs_vectors, n_analogs):
+    """Find n_analogs closest analogs from reforecasts"""
+    distances = np.linalg.norm(ref_vectors - forecast_vector, axis=1)
+    idx = np.argsort(distances)[:n_analogs]
+    analog_obs = ref_obs_vectors[idx]
+    return analog_obs
+
+# --- MAIN CALIBRATION LOOP ---
+corrected_forecasts = []
+
+for lead in forecast_lead_times:
+    for var in variables:
+        # Get current forecast vector (mean or members)
+        fc = forecast_df[(forecast_df['lead_time'] == lead) & (forecast_df['variable'] == var)]
+        fc_vector = fc['value'].values
+
+        # Get historical reforecasts and obs at same lead time
+        refc = reforecast_df[(reforecast_df['lead_time'] == lead) & (reforecast_df['variable'] == var)]
+        obs = obs_df[(obs_df['lead_time'] == lead) & (obs_df['variable'] == var)]
+
+        # Ensure alignment by date
+        common_dates = np.intersect1d(refc['date'].unique(), obs['date'].unique())
+
+        reforecast_matrix = []
+        obs_vector = []
+
+        for date in common_dates:
+            reforecast_on_date = refc[refc['date'] == date]['value'].values
+            obs_on_date = obs[obs['date'] == date]['value'].mean()
+            reforecast_matrix.append(reforecast_on_date)
+            obs_vector.append(obs_on_date)
+
+        reforecast_matrix = np.array(reforecast_matrix)
+        obs_vector = np.array(obs_vector)
+
+        # Find analogs
+        analogs = find_analogs(fc_vector, reforecast_matrix, obs_vector, n_analogs)
+
+        # Compute corrected forecast (e.g., mean of analogs)
+        corrected_value = np.mean(analogs)
+
+        corrected_forecasts.append({
+            'lead_time': lead,
+            'variable': var,
+            'corrected_value': corrected_value,
+            'raw_mean': np.mean(fc_vector)
+        })
+
+# --- OUTPUT ---
+corrected_df = pd.DataFrame(corrected_forecasts)
+corrected_df.to_csv('corrected_forecast.csv', index=False)
+print("Bias-corrected forecast saved to 'corrected_forecast.csv'")
 
